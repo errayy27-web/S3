@@ -310,7 +310,7 @@ class _OilHomeState extends State<OilHome> {
       refreshingReadOnly = false;
     }
   }
- Future<void> refreshStock()async{setState(()=>busy=true);try{final s=await api('/snapshot');final sl=await api('/sales');final incoming=list(s['products']).map((e)=>map(e)).toList();if(incoming.isEmpty)throw StateError('PC 0 ürün gönderdi; mevcut stok korunuyor');final sold=map(sl['sales']);setState((){products=incoming;base={for(final p in incoming)'${p['id']}':number(p['stock'])};previousSales=sold;});await prefs!.setString('stockBaselineSales',jsonEncode(sold));await save();notice('${products.length} ürün ve başlangıç stokları güncellendi');}catch(e){notice('Stok alınamadı: $e');}finally{if(mounted)setState(()=>busy=false);}}
+ Future<void> refreshStock()async{setState(()=>busy=true);try{final s=await api('/snapshot');final sl=await api('/sales');final incoming=list(s['products']).map((e)=>map(e)).toList();if(incoming.isEmpty)throw StateError('PC 0 ürün gönderdi; mevcut stok korunuyor');final sold=map(sl['sales']);setState((){products=incoming;base={for(final p in incoming)'${p['id']}':number(p['stock'])};previousSales=sold;});await prefs!.setString('stockBaselineSales',jsonEncode(sold));await save();archiveFuelSalePrices();notice('${products.length} ürün ve başlangıç stokları güncellendi');}catch(e){notice('Stok alınamadı: $e');}finally{if(mounted)setState(()=>busy=false);}}
  Future<void> refreshSales()async{setState(()=>busy=true);try{try{final central=await api('/daily-sales');setState(()=>daily=map(central['daily']));await prefs?.setString('daily',jsonEncode(daily));notice('PC günlük satış kayıtları güncellendi');return;}catch(_){ }final result=await api('/sales');final now=map(result['sales']);final today=day(DateTime.now());final bucket=map(daily[today]);for(final p in products){final id='${p['id']}';final current=number(now[id]);final old=number(previousSales[id]);final delta=max(0,current-old);if(delta>0)bucket[id]=number(bucket[id])+delta;previousSales[id]=current;}daily[today]=bucket;final oldest=day(DateTime.now().subtract(const Duration(days:6)));daily.removeWhere((date,_)=>date.compareTo(oldest)<0);await save();notice('Satışlar alındı • ${daily.length} günlük kayıt');}catch(e){notice('Satışlar alınamadı: $e');}finally{if(mounted)setState(()=>busy=false);}}
  Future<void> refreshKasa()async{
   final requestedDay=day(selected);
@@ -537,24 +537,84 @@ class _OilHomeState extends State<OilHome> {
   ]);
  }),icon:Icons.bolt)]);
  double salesTotal(bool isFuel){final counts=map(daily[day(selected)]);double total=0;for(final p in products){if(fuel(p)==isFuel)total+=number(counts['${p['id']}']).toDouble()*number(p['price']).toDouble();}return total;}
- Widget kasaPage()=>ListView(children:[
-  Row(children:[Expanded(child:Text('Tarih: ${day(selected)}')),IconButton(onPressed:()async{final d=await showDatePicker(context:context,initialDate:selected,firstDate:DateTime(2020),lastDate:DateTime(2100));if(d!=null){setState((){selected=d;followToday=day(d)==day(DateTime.now());kasa={};});await refreshKasa();}},icon:const Icon(Icons.calendar_month)),FilledButton.icon(onPressed:refreshKasa,icon:const Icon(Icons.refresh),label:const Text('Güncelle'))]),
-  card('Tahsilatlar',Column(children:[
-   metric('Nakit Market',kasa['cash_market']==null?'Veri yok':'${money(kasa['cash_market'])} KM'),
-   metric('Nakit Yakıt',kasa['cash_fuel']==null?'Veri yok':'${money(kasa['cash_fuel'])} KM'),
-   metric('Nakit Dopuna (MTEL + AERO)',kasa['mtel_dopuna']==null||kasa['aero_dopuna']==null?'Veri yok':'${money(number(kasa['mtel_dopuna'])+number(kasa['aero_dopuna']))} KM'),
-   metric('Nakit (Dopuna dahil)',kasa['cash']==null?'Veri yok':'${money(kasa['cash'])} KM'),
-   metric('Kredi Kartı',kasa['card']==null?'Veri yok':'${money(kasa['card'])} KM'),
-  ]),icon:Icons.payments),
-  card('Satış grupları',Column(children:[
-   metric('Yakıt',kasa['fuel_sales']!=null?'${money(kasa['fuel_sales'])} KM':daily.containsKey(day(selected))?'${money(salesTotal(true))} KM':'Satış kaydı yok'),
-   metric('Market',kasa['market_sales']!=null?'${money(kasa['market_sales'])} KM':daily.containsKey(day(selected))?'${money(salesTotal(false))} KM':'Satış kaydı yok'),
-   metric('MTEL Dopuna',kasa['mtel_dopuna']==null?'Veri yok':'${money(kasa['mtel_dopuna'])} KM'),
-   metric('AERO Dopuna',kasa['aero_dopuna']==null?'Veri yok':'${money(kasa['aero_dopuna'])} KM'),
-   metric('Toplam Nakit + Kart',kasa['cash']==null||kasa['card']==null?'Veri yok':'${money(number(kasa['cash'])+number(kasa['card']))} KM'),
-  ]),icon:Icons.storefront),
-  card('Yakıt stokları',Column(children:[for(final p in products.where(fuel).take(20))metric('${p['name']}',base.containsKey('${p['id']}')?'${money(remaining(p))} L':'Başlangıç stoku yok')]),icon:Icons.local_gas_station)
- ]);
+ Widget kasaPage(){
+  const accent=Color(0xffcb101b);
+  Widget rowValue(String label,dynamic value,{bool prominent=false})=>Padding(
+    padding:const EdgeInsets.symmetric(vertical:8),
+    child:Row(children:[
+      Expanded(child:Text(label,style:TextStyle(fontSize:15,fontWeight:prominent?FontWeight.w700:FontWeight.w400))),
+      const SizedBox(width:10),
+      Text(value==null?'Veri yok':'${money(value)} KM',style:TextStyle(fontSize:15,color:accent,fontWeight:FontWeight.w700))
+    ])
+  );
+  Widget panel(String title,IconData icon,List<Widget> children)=>Container(
+    margin:const EdgeInsets.only(bottom:12),
+    padding:const EdgeInsets.all(16),
+    decoration:BoxDecoration(color:Colors.white,borderRadius:BorderRadius.circular(20),border:Border.all(color:const Color(0xffe9e9e9)),boxShadow:const [BoxShadow(color:Color(0x11000000),blurRadius:5,offset:Offset(0,3))]),
+    child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      Row(children:[Icon(icon,color:accent,size:26),const SizedBox(width:10),Expanded(child:Text(title,style:const TextStyle(fontSize:20,fontWeight:FontWeight.bold)))]),
+      const SizedBox(height:12),...children
+    ])
+  );
+  final cash=kasa['cash'];
+  final cardTotal=kasa['card'];
+  final dopuna=(kasa['mtel_dopuna']!=null&&kasa['aero_dopuna']!=null)?number(kasa['mtel_dopuna'])+number(kasa['aero_dopuna']):null;
+  final fuelProducts=products.where(fuel).toList();
+  final maxFuelStock=fuelProducts.isEmpty?0.0:fuelProducts.map((p)=>remaining(p).clamp(0,double.infinity).toDouble()).reduce(max);
+  Widget stockLine(Map<String,dynamic> p,int index){
+    final stock=base.containsKey('${p['id']}')?remaining(p).clamp(0,double.infinity).toDouble():null;
+    final shade=[const Color(0xffffbc42),const Color(0xffe31b2c),const Color(0xff16ae58)][index%3];
+    return Padding(padding:const EdgeInsets.symmetric(vertical:6),child:Row(children:[
+      SizedBox(width:82,child:Container(padding:const EdgeInsets.symmetric(vertical:6,horizontal:5),decoration:BoxDecoration(color:shade,borderRadius:BorderRadius.circular(6)),child:Text('${p['name']}',maxLines:1,overflow:TextOverflow.ellipsis,textAlign:TextAlign.center,style:const TextStyle(fontWeight:FontWeight.bold,color:Colors.white)))),
+      const SizedBox(width:12),
+      Expanded(child:TweenAnimationBuilder<double>(tween:Tween<double>(begin:0,end:stock==null||maxFuelStock<=0?0:(stock/maxFuelStock).clamp(0,1)),duration:const Duration(milliseconds:900),builder:(context,value,_)=>ClipRRect(borderRadius:BorderRadius.circular(5),child:LinearProgressIndicator(value:value,minHeight:15,backgroundColor:const Color(0xffeeeeee),valueColor:AlwaysStoppedAnimation<Color>(shade))))),
+      const SizedBox(width:10),
+      SizedBox(width:78,child:Text(stock==null?'Veri yok':'${stock.toStringAsFixed(0)} L',textAlign:TextAlign.right,style:const TextStyle(fontWeight:FontWeight.bold,fontSize:13)))
+    ]));
+  }
+  final priceNames={'benzin':'Benzin','dizel':'Dizel','dizel_plus':'Dizel+'};
+  Map<String,dynamic>? fuelProductFor(String type){
+    final id={'benzin':'1','dizel':'2','dizel_plus':'3'}[type];
+    for(final p in products){if('${p['id']}'==id)return p;}
+    return null;
+  }
+  return ListView(children:[
+    Row(children:[
+      Expanded(child:Text('Tarih: ${day(selected)}',style:const TextStyle(fontSize:16,fontWeight:FontWeight.w600))),
+      IconButton(onPressed:()async{final d=await showDatePicker(context:context,initialDate:selected,firstDate:DateTime(2020),lastDate:DateTime(2100));if(d!=null){setState((){selected=d;followToday=day(d)==day(DateTime.now());kasa={};});await refreshKasa();await loadDailyFuelPrices();}},icon:const Icon(Icons.calendar_month,color:accent)),
+      FilledButton.icon(onPressed:()async{await refreshKasa();await loadDailyFuelPrices();},icon:const Icon(Icons.refresh),label:const Text('Güncelle'))
+    ]),
+    const SizedBox(height:10),
+    panel('Günlük Satış',Icons.payments,[
+      rowValue('Nakit Yakıt + Market',cash!=null&&dopuna!=null?number(cash)-dopuna:null),
+      rowValue('Nakit Dopuna (MTEL + AERO)',dopuna),
+      rowValue('Nakit (Dopuna dahil)',cash),
+      rowValue('Kredi Kartı',cardTotal),
+      const Divider(),
+      rowValue('Genel Toplam',cash!=null&&cardTotal!=null?number(cash)+number(cardTotal):null,prominent:true)
+    ]),
+    panel('Satış grupları',Icons.storefront,[
+      rowValue('Yakıt',kasa['fuel_sales']??(daily.containsKey(day(selected))?salesTotal(true):null)),
+      rowValue('Market',kasa['market_sales']??(daily.containsKey(day(selected))?salesTotal(false):null)),
+      rowValue('MTEL Dopuna',kasa['mtel_dopuna']),
+      rowValue('AERO Dopuna',kasa['aero_dopuna'])
+    ]),
+    panel('Yakıt Stokları',Icons.local_gas_station,[
+      if(fuelProducts.isEmpty)const Text('Yakıt stok verisi bulunamadı'),
+      for(var i=0;i<fuelProducts.length&&i<3;i++)stockLine(fuelProducts[i],i)
+    ]),
+    panel('Güncel Yakıt Fiyatları',Icons.trending_up,[
+      Row(children:[const Expanded(flex:2,child:Text('Yakıt',style:TextStyle(fontWeight:FontWeight.bold,fontSize:12))),const Expanded(flex:2,child:Text('Alış (KM/L)',textAlign:TextAlign.center,style:TextStyle(fontWeight:FontWeight.bold,fontSize:12))),const Expanded(flex:2,child:Text('Satış (KM/L)',textAlign:TextAlign.right,style:TextStyle(fontWeight:FontWeight.bold,fontSize:12)))]),
+      const Divider(),
+      for(final entry in priceNames.entries)Padding(padding:const EdgeInsets.symmetric(vertical:10),child:Row(children:[
+        Expanded(flex:2,child:Text(entry.value,style:const TextStyle(fontWeight:FontWeight.w600))),
+        Expanded(flex:2,child:Text(money(dailyFuelPurchasePrices[entry.key]??0),textAlign:TextAlign.center)),
+        Expanded(flex:2,child:Text(fuelProductFor(entry.key)==null?'—':money(fuelProductFor(entry.key)!['price']),textAlign:TextAlign.right,style:const TextStyle(color:accent,fontWeight:FontWeight.bold)))
+      ]))
+    ]),
+    const SizedBox(height:4)
+  ]);
+ }
  Widget stockPage(){final q=search.text.toLowerCase();final filtered=products.where((p)=>'${p['name']} ${p['id']} ${barcode(p)}'.toLowerCase().contains(q)&&(stockSupplier=='all'||(stockSupplier=='none'?'${supplierOf['${p['id']}']??''}'.isEmpty:'${supplierOf['${p['id']}']??''}'==stockSupplier))).toList();return Column(children:[Row(children:[Expanded(child:TextField(controller:search,onChanged:(_)=>setState((){}),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),hintText:'Ürün, şifra veya barkod'))),IconButton(onPressed:()=>scan(),icon:const Icon(Icons.qr_code_scanner))]),const SizedBox(height:8),DropdownButtonFormField<String>(value:stockSupplier,isExpanded:true,decoration:const InputDecoration(labelText:'Tedarikçiye göre filtrele'),items:[const DropdownMenuItem(value:'all',child:Text('Tüm tedarikçiler')),const DropdownMenuItem(value:'none',child:Text('Tedarikçisi olmayanlar')),...suppliers.entries.map((e)=>DropdownMenuItem(value:e.key,child:Text('${map(e.value)['name']}')))],onChanged:(v)=>setState(()=>stockSupplier=v??'all')),const SizedBox(height:8),Row(children:[Expanded(child:FilledButton.icon(onPressed:refreshStock,icon:const Icon(Icons.sync),label:const Text('Stok Güncelle')))]),Expanded(child:ListView.builder(itemCount:filtered.length,itemBuilder:(c,i){final p=filtered[i];return Card(child:ListTile(onTap:()=>productDetail(p),leading:photo('${p['id']}',48),title:Text('${p['name']}',maxLines:2),subtitle:Text('Šifra: ${p['id']} • Cijena: ${money(p['price'])} KM'),trailing:Text('${money(remaining(p))}\nKalan',textAlign:TextAlign.end)));}))]);}
  String stockSupplier='all';
  final search=TextEditingController();
@@ -646,6 +706,67 @@ class _OilHomeState extends State<OilHome> {
    setState(()=>cloudStatus=response.statusCode==200?'Supabase erişilebilir (veri eşitleme doğrulanmadı)':'Supabase yanıtı: HTTP ${response.statusCode}');
   }catch(e){if(mounted)setState(()=>cloudStatus='Bağlantı başarısız: $e');}
  }
+
+ Map<String,double> dailyFuelPurchasePrices={};
+ String? _saleArchiveSignature;
+ Future<void> loadDailyFuelPrices()async{
+  final r=await cloudRequest('GET','ssoil_fuel_daily_prices?sale_date=lte.${day(selected)}&select=sale_date,fuel_type,purchase_price&order=sale_date.desc&limit=3000');
+  if(r?.statusCode!=200)return;
+  final next=<String,double>{};
+  for(final item in list(jsonDecode(r!.body))){
+   final row=map(item),type='${row['fuel_type']}';
+   if(!next.containsKey(type)&&row['purchase_price']!=null)next[type]=number(row['purchase_price']).toDouble();
+  }
+  if(mounted)setState(()=>dailyFuelPurchasePrices=next);
+ }
+ Future<void> archiveFuelSalePrices()async{
+  if(supabaseUrl.trim().isEmpty||supabaseKey.trim().isEmpty)return;
+  final prices=<String,double>{};
+  for(final e in {'benzin':'1','dizel':'2','dizel_plus':'3'}.entries){
+   for(final p in products){if('${p['id']}'==e.value){prices[e.key]=number(p['price']).toDouble();break;}}
+  }
+  if(prices.length!=3)return;
+  final date=day(DateTime.now());
+  final signature='$date:${jsonEncode(prices)}';
+  if(_saleArchiveSignature==signature)return;
+  final payload=[for(final e in prices.entries){'sale_date':date,'fuel_type':e.key,'sale_price':e.value}];
+  final r=await cloudRequest('POST','ssoil_fuel_daily_prices?on_conflict=sale_date,fuel_type',body:payload);
+  if(r!=null&&r.statusCode>=200&&r.statusCode<300)_saleArchiveSignature=signature;
+ }
+ Future<void> saveDailyFuelPurchasePrices(Map<String,String> values)async{
+  final payload=<Map<String,dynamic>>[];
+  for(final entry in values.entries){
+   if(entry.value.trim().isEmpty)continue;
+   final value=double.tryParse(entry.value.trim().replaceAll(',','.'));
+   if(value==null||value<0){notice('Geçerli alış fiyatı girin');return;}
+   payload.add({'sale_date':day(DateTime.now()),'fuel_type':entry.key,'purchase_price':value});
+  }
+  if(payload.isEmpty)return;
+  // Daily purchase prices are written only on explicit Save, never in background refresh.
+  final r=await cloudRequest('POST','ssoil_fuel_daily_prices?on_conflict=sale_date,fuel_type',body:payload);
+  if(r==null||r.statusCode<200||r.statusCode>=300){notice('Alış fiyatları kaydedilemedi: $cloudError');return;}
+  await loadDailyFuelPrices();notice('Günlük alış fiyatları kaydedildi');
+ }
+ Future<void> fuelPurchasePriceDialog()async{
+  await loadDailyFuelPrices();if(!mounted)return;
+  final names={'benzin':'Benzin (1)','dizel':'Dizel (2)','dizel_plus':'Dizel+ (3)'};
+  final inputs={for(final e in names.entries)e.key:TextEditingController(text:dailyFuelPurchasePrices[e.key]?.toStringAsFixed(2)??'')};
+  try{
+   await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Günlük Yakıt Alış Fiyatları'),content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[for(final e in names.entries)Padding(padding:const EdgeInsets.symmetric(vertical:6),child:TextField(controller:inputs[e.key],keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:InputDecoration(labelText:'${e.value} • KM/L')))])),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Kapat')),FilledButton(onPressed:()async{await saveDailyFuelPurchasePrices({for(final e in inputs.entries)e.key:e.value.text});},child:const Text('Kaydet'))]));
+  }finally{for(final c in inputs.values){c.dispose();}}
+ }
+ Future<void> createSupabaseUserDialog()async{
+  final email=TextEditingController();final password=TextEditingController();
+  final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Kullanıcı Ekle'),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(controller:email,keyboardType:TextInputType.emailAddress,decoration:const InputDecoration(labelText:'E-posta')),TextField(controller:password,obscureText:true,decoration:const InputDecoration(labelText:'Geçici şifre'))]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('İptal')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Kullanıcı Oluştur'))]));
+  if(accepted!=true)return;
+  if(!email.text.contains('@')||password.text.length<8){notice('Geçerli e-posta ve en az 8 karakterli şifre gerekli');return;}
+  if(supabaseAccessToken.isEmpty&&!await cloudLogin()){notice('Supabase oturumu açılmadı');return;}
+  try{
+   final url=supabaseUrl.trim().replaceAll(RegExp(r'/+$'),'');
+   final r=await http.post(Uri.parse('$url/functions/v1/ssoil-admin'),headers:{'apikey':supabaseKey.trim(),'Authorization':'Bearer $supabaseAccessToken','Content-Type':'application/json'},body:jsonEncode({'action':'create_user','email':email.text.trim(),'password':password.text})).timeout(const Duration(seconds:12));
+   notice(r.statusCode>=200&&r.statusCode<300?'Kullanıcı oluşturuldu':'Kullanıcı oluşturulamadı (HTTP ${r.statusCode})');
+  }catch(e){notice('Kullanıcı oluşturulamadı: $e');}
+ }
  Widget settingsPage()=>ListView(children:[
   card('Bağlantılar',Column(children:[
    field('Yerel API adresi',local,(v)=>local=v),
@@ -683,6 +804,11 @@ class _OilHomeState extends State<OilHome> {
     FilledButton.icon(onPressed:testSupabase,icon:const Icon(Icons.cloud_done),label:const Text('Bağlantıyı Test Et')),
    ]),
   ]),icon:Icons.cloud_outlined),
+  card('Yakıt Fiyatları ve Kullanıcılar',Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+   FilledButton.icon(onPressed:fuelPurchasePriceDialog,icon:const Icon(Icons.local_gas_station),label:const Text('Yakıt Alış Fiyatlarını Gir / Kaydet')),
+   const SizedBox(height:8),
+   OutlinedButton.icon(onPressed:createSupabaseUserDialog,icon:const Icon(Icons.person_add),label:const Text('Kullanıcı Ekle')),
+  ]),icon:Icons.manage_accounts),
   card('Veri Temizleme',Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
    const Text('Silme öncesi onay alınır. PC bağlantısı başarısızsa silme değişikliği telefonda sıraya alınır; diğer cihazlara ulaştığı garanti değildir.'),
    const SizedBox(height:8),
