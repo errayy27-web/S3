@@ -723,19 +723,7 @@ class _OilHomeState extends State<OilHome> {
  }
  Future<http.Response?> _fuelPriceUpsert(List<Map<String,dynamic>> rows)async{
   if(supabaseAccessToken.isEmpty&&!await cloudLogin())return null;
-   final root=supabaseUrl.trim().replaceAll(RegExp(r'/+
-  for(var attempt=0;attempt<2;attempt++){
-   try{
-    final response=await http.post(Uri.parse('$root/rest/v1/ssoil_fuel_daily_prices?on_conflict=sale_date,fuel_type'),
-     headers:{'apikey':supabaseKey.trim(),'Authorization':'Bearer $supabaseAccessToken','Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=representation'},
-     body:jsonEncode(rows)).timeout(const Duration(seconds:12));
-    if((response.statusCode==401||response.statusCode==403)&&attempt==0){supabaseAccessToken='';if(await cloudLogin())continue;}
-    if(response.statusCode>=400)cloudError='Yakıt fiyatları HTTP ${response.statusCode}: ${response.body}';
-    return response;
-   }catch(e){cloudError='Yakıt fiyatları: $e';return null;}
-  }
-  return null;
- }),'');
+  final root=supabaseUrl.trim().replaceAll(RegExp(r'/+$'),'');
   for(var attempt=0;attempt<2;attempt++){
    try{
     final response=await http.post(Uri.parse('$root/rest/v1/ssoil_fuel_daily_prices?on_conflict=sale_date,fuel_type'),
@@ -748,7 +736,7 @@ class _OilHomeState extends State<OilHome> {
   }
   return null;
  }
-  Future<void> archiveFuelSalePrices()async{
+ Future<void> archiveFuelSalePrices()async{
   if(supabaseUrl.trim().isEmpty||supabaseKey.trim().isEmpty)return;
   final prices=<String,double>{};
   for(final e in {'benzin':'1','dizel':'2','dizel_plus':'3'}.entries){
@@ -968,5 +956,3 @@ class _ScannerState extends State<Scanner>{bool scanned=false;@override Widget b
 
  @override Widget build(BuildContext c){final Widget currentPage=switch(page){0=>homePage(),1=>kasaPage(),2=>stockPage(),3=>ordersPage(),4=>topPage(),5=>reportsPage(),6=>settingsPage(),7=>countPage(),8=>barcodeErrorsPage(),_=>homePage()};final names=['Ana Sayfa','Kasa','Stok','Siparişler','Çok Satanlar','Raporlar','Ayarlar','Stok Sayım','Barkod Hataları'];final icons=[Icons.home_rounded,Icons.point_of_sale,Icons.inventory_2,Icons.shopping_cart,Icons.leaderboard,Icons.analytics,Icons.settings,Icons.fact_check,Icons.qr_code];return Scaffold(appBar:AppBar(title:Row(children:[ClipRRect(borderRadius:BorderRadius.circular(7),child:Image.asset('assets/ss_oil_logo.jpg',height:34,width:34,fit:BoxFit.contain)),const SizedBox(width:10),Expanded(child:Text('SS OIL • ${names[page]}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontSize:18,fontWeight:FontWeight.bold)))]),actions:[if(busy)const Padding(padding:EdgeInsets.all(14),child:SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2))),IconButton(onPressed:()=>setState(()=>page=6),icon:const Icon(Icons.settings_outlined))]),body:Padding(padding:const EdgeInsets.all(12),child:KeyedSubtree(key:ValueKey<String>('ssoil-page-$page'),child:currentPage)),bottomNavigationBar:NavigationBar(height:70,backgroundColor:Theme.of(c).cardColor,selectedIndex:page<5?page:0,onDestinationSelected:(i)=>setState(()=>page=i),destinations:[for(var i=0;i<5;i++)NavigationDestination(icon:Icon(icons[i]),label:names[i])]),drawer:Drawer(child:SafeArea(child:ListView(children:[DrawerHeader(child:Image.asset('assets/ss_oil_logo.jpg',fit:BoxFit.contain)),for(var i=0;i<names.length;i++)ListTile(leading:Icon(icons[i],color:page==i?Theme.of(context).colorScheme.primary:null),title:Text(names[i]),selected:page==i,onTap:(){setState(()=>page=i);Navigator.pop(c);})]))));}
 }
-class Scanner extends StatefulWidget{final ValueChanged<String> onCode;const Scanner({super.key,required this.onCode});@override State<Scanner> createState()=>_ScannerState();}
-class _ScannerState extends State<Scanner>{bool scanned=false;@override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('Barkod Oku')),body:MobileScanner(onDetect:(capture){if(scanned)return;final code=capture.barcodes.firstOrNull?.rawValue;if(code!=null&&code.isNotEmpty){scanned=true;widget.onCode(code);}}));}
