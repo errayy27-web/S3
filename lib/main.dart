@@ -723,7 +723,32 @@ class _OilHomeState extends State<OilHome> {
  }
  Future<http.Response?> _fuelPriceUpsert(List<Map<String,dynamic>> rows)async{
   if(supabaseAccessToken.isEmpty&&!await cloudLogin())return null;
-  final root=supabaseUrl.trim().replaceAll(RegExp(r'/+
+   final root=supabaseUrl.trim().replaceAll(RegExp(r'/+
+  for(var attempt=0;attempt<2;attempt++){
+   try{
+    final response=await http.post(Uri.parse('$root/rest/v1/ssoil_fuel_daily_prices?on_conflict=sale_date,fuel_type'),
+     headers:{'apikey':supabaseKey.trim(),'Authorization':'Bearer $supabaseAccessToken','Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=representation'},
+     body:jsonEncode(rows)).timeout(const Duration(seconds:12));
+    if((response.statusCode==401||response.statusCode==403)&&attempt==0){supabaseAccessToken='';if(await cloudLogin())continue;}
+    if(response.statusCode>=400)cloudError='Yakıt fiyatları HTTP ${response.statusCode}: ${response.body}';
+    return response;
+   }catch(e){cloudError='Yakıt fiyatları: $e';return null;}
+  }
+  return null;
+ }),'');
+  for(var attempt=0;attempt<2;attempt++){
+   try{
+    final response=await http.post(Uri.parse('$root/rest/v1/ssoil_fuel_daily_prices?on_conflict=sale_date,fuel_type'),
+     headers:{'apikey':supabaseKey.trim(),'Authorization':'Bearer $supabaseAccessToken','Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=representation'},
+     body:jsonEncode(rows)).timeout(const Duration(seconds:12));
+    if((response.statusCode==401||response.statusCode==403)&&attempt==0){supabaseAccessToken='';if(await cloudLogin())continue;}
+    if(response.statusCode>=400)cloudError='Yakıt fiyatları HTTP ${response.statusCode}: ${response.body}';
+    return response;
+   }catch(e){cloudError='Yakıt fiyatları: $e';return null;}
+  }
+  return null;
+ }
+  Future<void> archiveFuelSalePrices()async{
   if(supabaseUrl.trim().isEmpty||supabaseKey.trim().isEmpty)return;
   final prices=<String,double>{};
   for(final e in {'benzin':'1','dizel':'2','dizel_plus':'3'}.entries){
@@ -841,33 +866,6 @@ class _OilHomeState extends State<OilHome> {
 }
 class Scanner extends StatefulWidget{final ValueChanged<String> onCode;const Scanner({super.key,required this.onCode});@override State<Scanner> createState()=>_ScannerState();}
 class _ScannerState extends State<Scanner>{bool scanned=false;@override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('Barkod Oku')),body:MobileScanner(onDetect:(capture){if(scanned)return;final code=capture.barcodes.firstOrNull?.rawValue;if(code!=null&&code.isNotEmpty){scanned=true;widget.onCode(code);}}));}
-),'');
-  for(var attempt=0;attempt<2;attempt++){
-   try{
-    final response=await http.post(Uri.parse('$root/rest/v1/ssoil_fuel_daily_prices?on_conflict=sale_date,fuel_type'),
-     headers:{'apikey':supabaseKey.trim(),'Authorization':'Bearer $supabaseAccessToken','Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=representation'},
-     body:jsonEncode(rows)).timeout(const Duration(seconds:12));
-    if((response.statusCode==401||response.statusCode==403)&&attempt==0){supabaseAccessToken='';if(await cloudLogin())continue;}
-    if(response.statusCode>=400)cloudError='Yakıt fiyatları HTTP ${response.statusCode}: ${response.body}';
-    return response;
-   }catch(e){cloudError='Yakıt fiyatları: $e';return null;}
-  }
-  return null;
- }
- Future<void> archiveFuelSalePrices()async{
-  if(supabaseUrl.trim().isEmpty||supabaseKey.trim().isEmpty)return;
-  final prices=<String,double>{};
-  for(final e in {'benzin':'1','dizel':'2','dizel_plus':'3'}.entries){
-   for(final p in products){if('${p['id']}'==e.value){prices[e.key]=number(p['price']).toDouble();break;}}
-  }
-  if(prices.length!=3)return;
-  final date=day(DateTime.now());
-  final signature='$date:${jsonEncode(prices)}';
-  if(_saleArchiveSignature==signature)return;
-  final payload=[for(final e in prices.entries){'sale_date':date,'fuel_type':e.key,'sale_price':e.value}];
-  final r=await _fuelPriceUpsert(payload);
-  if(r!=null&&r.statusCode>=200&&r.statusCode<300)_saleArchiveSignature=signature;
- }
  Future<void> saveDailyFuelPurchasePrices(Map<String,String> values)async{
   final payload=<Map<String,dynamic>>[];
   for(final entry in values.entries){
